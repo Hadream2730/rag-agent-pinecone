@@ -11,3 +11,5 @@ langchain-openai
 python-dotenv
 python-multipart
 pinecone
+openai>=1.12.0
+audio-recorder-streamlit

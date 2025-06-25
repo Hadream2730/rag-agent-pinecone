@@ -6,11 +6,12 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain.docstore.document import Document
 from pinecone import Pinecone, ServerlessSpec
+import concurrent.futures, itertools
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMBEDDING_MODEL = "text-embedding-3-small"
-CHUNK_SIZE      = 1000
-CHUNK_OVERLAP   = 100
+CHUNK_SIZE      = 1500
+CHUNK_OVERLAP   = 80
 MAX_INPUT_TOKENS = 300000
 
 def load_text(path: str) -> str:
@@ -57,36 +58,35 @@ def create_pinecone_index(
 
     pc.create_index(
         name=index_name,
-        dimension=1536,  # OpenAI text-embedding-3-small output size
+        dimension=1536,  
         metric="cosine",
         spec=ServerlessSpec(cloud=cloud, region=region),
     )
 
     index = pc.Index(index_name)
 
-    # Ingest in batches
-    for i in range(0, len(all_chunks), batch_size):
-        batch = all_chunks[i : i + batch_size]
+    # Prepare batches
+    batches = [all_chunks[i : i + batch_size] for i in range(0, len(all_chunks), batch_size)]
+
+    def process_batch(batch_tuple):
+        idx_offset, batch = batch_tuple
         texts = [c.page_content for c in batch]
         metas = [c.metadata for c in batch]
-
         embeddings = embedder.embed_documents(texts)
-
         records = [
             {
-                "id": f"doc-{i + j}",
+                "id": f"doc-{idx_offset + j}",
                 "values": embeddings[j],
-                "metadata": {
-                    **metas[j],
-                    "text": texts[j],
-                },
+                "metadata": {**metas[j], "text": texts[j]},
             }
             for j in range(len(texts))
         ]
-
         index.upsert(records)
+        return len(batch)
 
-        print(f"[EmbeddingCreator] indexed batch {i//batch_size+1}: {len(batch)} chunks")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        for count in executor.map(process_batch, [(i*batch_size, b) for i, b in enumerate(batches)]):
+            print(f"[EmbeddingCreator] indexed {count} chunks concurrently")
 
     print(f"[EmbeddingCreator] Pinecone index '{index_name}' populated and ready.")
     return index

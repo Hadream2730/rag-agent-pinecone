@@ -6,6 +6,7 @@ from langchain_core.output_parsers import StrOutputParser
 from prompts import QA_PROMPT_TEMPLATE
 from dotenv import load_dotenv
 from typing import Any
+from langchain_openai import OpenAIEmbeddings
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -21,6 +22,10 @@ llm = ChatOpenAI(
 )
 chain = prompt | llm | StrOutputParser()
 
+# Shared embedder to avoid re-instantiation overhead
+openai_api_key = os.getenv("OPENAI_API_KEY")
+embedder = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=openai_api_key)
+
 async def answer_question(pinecone_index: Any, question: str, k: int = 3) -> str:
     print(f"Starting question processing: '{question[:50]}...' at {time.strftime('%H:%M:%S')}")
     total_start_time = time.time()
@@ -30,8 +35,6 @@ async def answer_question(pinecone_index: Any, question: str, k: int = 3) -> str
     retrieval_start_time = time.time()
     
     # Compute query embedding and search via Pinecone
-    from langchain_openai import OpenAIEmbeddings
-    embedder = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=os.getenv("OPENAI_API_KEY"))
     query_vec = embedder.embed_query(question)
 
     res = pinecone_index.query(vector=query_vec, top_k=k, include_metadata=True)
