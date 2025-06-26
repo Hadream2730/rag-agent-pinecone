@@ -5,30 +5,42 @@ import requests
 from api import app as fastapi_app
 import base64
 import io
+import streamlit.components.v1 as components
 
-# Optional audio recorder components (try st_audiorec first, then streamlit-mic-recorder)
-AUDIOREC_FN = None
-try:
-    from audio_recorder_streamlit import audio_recorder  # type: ignore
+# ---------------------------------------------------------------------------
+# Prefer streamlit_mic_recorder which supports custom start/stop prompts
+# ---------------------------------------------------------------------------
 
-    def _wrapper_ars():
-        return audio_recorder("Start Recording", "Stop", icon_name="microphone", icon_size="2x", recording_color="#e8b62c", neutral_color="#6aa36f")
+# 1st choice: streamlit_mic_recorder (supports separate start/stop prompts)
 
-    AUDIOREC_FN = _wrapper_ars
-except ModuleNotFoundError:
+def _get_mic_bytes() -> bytes | None:
+    """Return WAV bytes from whichever recorder library is available."""
     try:
-        from st_audiorec import st_audiorec  # type: ignore
-        AUDIOREC_FN = st_audiorec
+        from streamlit_mic_recorder import mic_recorder  # type: ignore
+
+        rec = mic_recorder(
+            start_prompt="🎙️ Start Recording",
+            stop_prompt="🛑 Stop Recording",
+            format="wav",
+            key="mic_recorder",
+        )
+        return rec["bytes"] if rec else None
+
     except ModuleNotFoundError:
+        # Fallback to audio_recorder_streamlit (single label, rely on icon color)
         try:
-            from mic_recorder_streamlit import mic_recorder  # type: ignore
+            from audio_recorder_streamlit import audio_recorder  # type: ignore
 
-            def _wrapper_mic():
-                return mic_recorder(start_prompt="Start recording", stop_prompt="Stop", show_text=False)
-
-            AUDIOREC_FN = _wrapper_mic
+            return audio_recorder(
+                text="🎙️ Start Recording",  # single text
+                icon_name="microphone",
+                icon_size="2x",
+                neutral_color="#6aa36f",
+                recording_color="#e8b62c",
+                key="audio_rec_fallback",
+            )
         except ModuleNotFoundError:
-            AUDIOREC_FN = None
+            return None
 
 # Page config
 st.set_page_config(page_title="RAG Chatbot", layout="wide")
@@ -96,15 +108,17 @@ st.subheader("Ask a question")
 
 text_query = st.text_input("Type your question (optional)")
 
-audio_bytes: bytes | None = None
+# --- Voice recording input ----------------------------------------------------
 
-if AUDIOREC_FN is not None:
-    st.write("Or record your question:")
-    audio_bytes = AUDIOREC_FN()
-else:
-    audio_file = st.file_uploader("Or upload an audio file", type=["wav", "mp3", "m4a", "flac", "ogg", "opus"])
-    if audio_file is not None:
-        audio_bytes = audio_file.read()
+st.write("Or record your question:")
+
+status_placeholder = st.empty()
+
+# Attempt to use recorder; if unavailable, fall back to upload
+audio_bytes = _get_mic_bytes()
+
+if audio_bytes is None:
+    pass
 
 # voice select addition near input area before send button
 voice_choice = "nova"  # default TTS voice
