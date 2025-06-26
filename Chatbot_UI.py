@@ -130,9 +130,9 @@ if st.button("Send"):
                 resp_json = resp.json()
                 answer_text = resp_json.get("answer")
                 answer_audio_b64 = resp_json.get("answer_audio", "")
-                transcript = resp_json.get("transcript") or '🔊 Audio question'
-                # Render user message now (only after we have transcript)
-                final_user_text = text_query or transcript or "🔊 (no transcript)"
+                question_text = resp_json.get("question", text_query or '🔊 Audio question')
+                # Render user message now (text or transcript from backend)
+                final_user_text = question_text
                 st.session_state['messages'].append({'role': 'user', 'content': final_user_text})
                 st.chat_message('user').write(final_user_text)
             else:
