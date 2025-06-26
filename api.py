@@ -31,10 +31,7 @@ app.state.pinecone_index: Any | None = None
 # ─── Upload Endpoint ─────────────────────────────────────
 @app.post("/upload/", response_model=UploadResponse)
 async def upload_files(files: list[UploadFile] = File(...)):
-    """
-    Receive multiple .pdf or .docx files, save them, build a Pinecone index, 
-    and store it on app.state.
-    """
+ 
     # Clean previous uploads and index to free memory
     _remove_directory(UPLOAD_DIR)
     app.state.pinecone_index = None
