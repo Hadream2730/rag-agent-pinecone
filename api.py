@@ -1,17 +1,21 @@
 import os
 import shutil
 import time
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form, Request, BackgroundTasks
 from fastapi.responses import ORJSONResponse
 from typing import Any, Union
 from models import UploadResponse, AskResponse
 from embedding_creator import create_pinecone_index
 from chatbot import answer_question
 from audio_utils import transcribe_audio, synthesize_speech
+import uuid
 
 # ─── App & Directories ────────────────────────────────────
 app = FastAPI(default_response_class=ORJSONResponse)
 UPLOAD_DIR = "uploads"
+
+# Global progress dictionary {task_id: percentage}
+TASK_PROGRESS: dict[str, int] = {}
 
 # Utility: remove a directory entirely
 def _remove_directory(path: str):
@@ -28,9 +32,23 @@ async def _startup_cleanup():
 
 app.state.pinecone_index: Any | None = None
 
+# Background task to build index and update progress
+def _index_task(paths: list[str], task_id: str):
+    TASK_PROGRESS[task_id] = 0
+
+    def _cb(pct: int):
+        TASK_PROGRESS[task_id] = pct
+
+    try:
+        app.state.pinecone_index = create_pinecone_index(paths, progress_cb=_cb)
+        TASK_PROGRESS[task_id] = 100
+    except Exception as e:
+        TASK_PROGRESS[task_id] = -1  # indicates failure
+        print(f"[Upload] indexing task {task_id} failed: {e}")
+
 # ─── Upload Endpoint ─────────────────────────────────────
 @app.post("/upload/", response_model=UploadResponse)
-async def upload_files(files: list[UploadFile] = File(...)):
+async def upload_files(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...)):
  
     # Clean previous uploads and index to free memory
     _remove_directory(UPLOAD_DIR)
@@ -60,19 +78,13 @@ async def upload_files(files: list[UploadFile] = File(...)):
     save_time = time.time() - save_start_time
     print(f"All files saved in {save_time:.2f} seconds")
 
-    # Index creation timing
-    print("Creating Pinecone index...")
-    index_start_time = time.time()
-    app.state.pinecone_index = create_pinecone_index(paths)
-    index_time = time.time() - index_start_time
-    print(f"Pinecone index populated in {index_time:.2f} seconds for {len(files)} file(s)")
-    
-    total_upload_time = time.time() - upload_start_time
-    print(f"Total upload processing time: {total_upload_time:.2f} seconds")
-    print(f"Upload completed successfully at {time.strftime('%H:%M:%S')}")
-    print("-" * 60)
-    
-    return UploadResponse(message=f"Indexed {len(files)} document(s)")
+    # Kick off background indexing task
+    task_id = str(uuid.uuid4())
+    background_tasks.add_task(_index_task, paths, task_id)
+
+    print(f"Indexing started in background task {task_id}")
+
+    return UploadResponse(task_id=task_id, message="Indexing started")
 
 # ─── Dependency to fetch Pinecone index ─────────────────
 def get_pinecone_index():
@@ -144,6 +156,20 @@ async def ask(
     print("=" * 60)
 
     return AskResponse(question=question, answer=answer_text, answer_audio=answer_audio_b64)
+
+# ─── Progress Endpoint ─────────────────────────────────────
+@app.get("/progress/{task_id}")
+async def progress(task_id: str):
+    pct = TASK_PROGRESS.get(task_id)
+    if pct is None:
+        raise HTTPException(404, "Unknown task id")
+    return {"progress": pct}
+
+# ─── Transcribe Endpoint ─────────────────────────────────────
+@app.post("/transcribe/")
+async def transcribe_endpoint(audio: UploadFile = File(...)):
+    text = await transcribe_audio(audio)
+    return {"text": text}
 
 
 

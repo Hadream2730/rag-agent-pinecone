@@ -28,6 +28,7 @@ def load_text(path: str) -> str:
 def create_pinecone_index(
     paths: List[str],
     index_name: str | None = None,
+    progress_cb = None,
 ) -> Any:
    
     splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
@@ -39,7 +40,10 @@ def create_pinecone_index(
         docs = [Document(page_content=raw, metadata={"source": os.path.basename(p)})]
         chunks = splitter.split_documents(docs)
         all_chunks.extend(chunks)
-    print(f"[EmbeddingCreator] total chunks: {len(all_chunks)}")
+    total_chunks = len(all_chunks)
+    print(f"[EmbeddingCreator] total chunks: {total_chunks}")
+    if progress_cb:
+        progress_cb(5)  # initial step after loading and splitting
 
     batch_size = MAX_INPUT_TOKENS // CHUNK_SIZE
     embedder = OpenAIEmbeddings(model=EMBEDDING_MODEL, api_key=OPENAI_API_KEY)
@@ -84,9 +88,16 @@ def create_pinecone_index(
         index.upsert(records)
         return len(batch)
 
+    processed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         for count in executor.map(process_batch, [(i*batch_size, b) for i, b in enumerate(batches)]):
+            processed += count
+            if progress_cb:
+                pct = 5 + int(90 * processed / total_chunks)
+                progress_cb(min(pct, 95))
             print(f"[EmbeddingCreator] indexed {count} chunks concurrently")
 
+    if progress_cb:
+        progress_cb(100)
     print(f"[EmbeddingCreator] Pinecone index '{index_name}' populated and ready.")
     return index

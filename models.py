@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 
 class UploadResponse(BaseModel):
+    task_id: str
     message: str
 
 class AskRequest(BaseModel):

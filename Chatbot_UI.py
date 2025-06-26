@@ -6,6 +6,16 @@ from api import app as fastapi_app
 import base64
 import io
 import streamlit.components.v1 as components
+import time
+import hashlib
+
+# ---------- Utility: safe Streamlit rerun (supports old and new API) ----------
+
+def _safe_rerun() -> None:
+    if hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    elif hasattr(st, "rerun"):
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Prefer streamlit_mic_recorder which supports custom start/stop prompts
@@ -71,17 +81,38 @@ if st.sidebar.button("Index Document(s)"):
         file_tuple = [
             ("files", (uf.name, uf, uf.type)) for uf in uploaded_files
         ]
-        with st.spinner("Indexing documents..."):
-            try:
-                resp = requests.post("http://localhost:8005/upload/", files=file_tuple)
-                if resp.ok:
-                    # Clear previous chat
-                    st.session_state['messages'] = []
-                    st.sidebar.success(resp.json().get("message"))
+        try:
+            resp = requests.post("http://localhost:8005/upload/", files=file_tuple)
+            if resp.ok:
+                task_id = resp.json().get("task_id")
+                st.session_state['messages'] = []
+                progress_bar = st.sidebar.progress(0)
+                progress_text = st.sidebar.empty()
+                pct = 0
+                while pct < 100 and pct >= 0:
+                    try:
+                        p_resp = requests.get(f"http://localhost:8005/progress/{task_id}")
+                        if p_resp.ok:
+                            pct = p_resp.json().get("progress", 0)
+                            if pct < 0:
+                                raise RuntimeError("Indexing failed")
+                            progress_bar.progress(min(pct, 100)/100.0)
+                            progress_text.text(f"Indexing progress: {pct}%")
+                            time.sleep(0.5)
+                        else:
+                            break
+                    except Exception:
+                        break
+                if pct == 100:
+                    progress_text.text("Indexing progress: 100%")
+                    st.sidebar.success("Indexing complete ✅")
                 else:
-                    st.sidebar.error(f"Error {resp.status_code}: {resp.json().get('detail')}")
-            except Exception as e:
-                st.sidebar.error(f"Connection error: {e}")
+                    progress_text.text(f"Indexing stopped at: {pct}%")
+                    st.sidebar.error("Indexing did not complete.")
+            else:
+                st.sidebar.error(f"Error {resp.status_code}: {resp.json().get('detail')}")
+        except Exception as e:
+            st.sidebar.error(f"Connection error: {e}")
 
 # Start FastAPI only once using session_state
 
@@ -96,6 +127,10 @@ if 'api_started' not in st.session_state:
 st.title("📚 RAG Chatbot")
 if 'messages' not in st.session_state:
     st.session_state['messages'] = []
+if 'question_input' not in st.session_state:
+    st.session_state['question_input'] = ""
+if st.session_state.get('transcript_pending'):
+    st.session_state['question_input'] = st.session_state.pop('transcript_pending')
 
 # Display existing chat
 for msg in st.session_state['messages']:
@@ -106,7 +141,7 @@ for msg in st.session_state['messages']:
 st.divider()
 st.subheader("Ask a question")
 
-text_query = st.text_input("Type your question (optional)")
+text_query = st.text_input("Type your question (optional)", key="question_input")
 
 # --- Voice recording input ----------------------------------------------------
 
@@ -117,16 +152,48 @@ status_placeholder = st.empty()
 # Attempt to use recorder; if unavailable, fall back to upload
 audio_bytes = _get_mic_bytes()
 
-if audio_bytes is None:
-    pass
+# Check if we have new audio to transcribe
+if audio_bytes is not None:
+    # Create hash of audio to detect if it's new
+    audio_hash = hashlib.md5(audio_bytes).hexdigest()
+    last_audio_hash = st.session_state.get('last_audio_hash', '')
+    
+    # Only transcribe if this is new audio and we don't have a pending transcript
+    if (audio_hash != last_audio_hash and 
+        'transcript_pending' not in st.session_state and 
+        not st.session_state.get('transcribing_in_progress', False)):
+        
+        st.session_state['transcribing_in_progress'] = True
+        st.session_state['last_audio_hash'] = audio_hash
+        
+        try:
+            with st.spinner("Transcribing audio..."):
+                files = {"audio": ("question.wav", audio_bytes, "audio/wav")}
+                tr_resp = requests.post("http://localhost:8005/transcribe/", files=files)
+                if tr_resp.ok:
+                    transcript = tr_resp.json().get("text", "")
+                    st.session_state['transcript_pending'] = transcript
+                    st.session_state['transcribing_in_progress'] = False
+                    st.rerun()
+        except Exception as e:
+            st.session_state['transcribing_in_progress'] = False
+            st.error(f"Transcription error: {e}")
+
+# Reset transcription flag when transcript is ready
+if st.session_state.get('transcript_pending'):
+    st.session_state['transcribing_in_progress'] = False
 
 # voice select addition near input area before send button
 voice_choice = "nova"  # default TTS voice
 
 if st.button("Send"):
-    if not text_query and not audio_bytes:
-        st.warning("Please provide text or record/upload audio.")
+    if not text_query.strip():
+        st.warning("Please provide a question (text or record audio).")
         st.stop()
+
+    # ensure we're only sending text; audio already transcribed
+    if 'transcript_pending' in st.session_state or audio_bytes is None:
+        audio_bytes = None
 
     audio_only = bool(audio_bytes and not text_query)
     with st.spinner("Thinking..."):
@@ -168,3 +235,6 @@ if st.button("Send"):
 
     # Clear audio buffer so user must record again next turn
     audio_bytes = None
+    st.session_state.pop('transcript_pending', None)
+    st.session_state['transcribing_in_progress'] = False
+    st.session_state.pop('last_audio_hash', None)  # Reset audio hash for next recording
