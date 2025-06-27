@@ -19,15 +19,23 @@
   },
   "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
   "postAttachCommand": {
-    "server": "streamlit run Chatbot_UI.py --server.enableCORS false --server.enableXsrfProtection false"
+   // "server": "streamlit run Chatbot_UI.py --server.enableCORS false --server.enableXsrfProtection false"
+    "api": "uvicorn api:app --host 0.0.0.0 --port 8005",
+    "ui": "streamlit run Chatbot_UI.py --server.enableCORS false --server.enableXsrfProtection false --server.port 8501"
   },
   "portsAttributes": {
+    "8005": {
+      "label": "API Server",
+      "onAutoForward": "silent"
+    },
     "8501": {
-      "label": "Application",
+     // "label": "Application",
+      "label": "Streamlit UI",
       "onAutoForward": "openPreview"
     }
   },
   "forwardPorts": [
+    8005,
     8501
   ]
 }

@@ -1,13 +1,12 @@
 import streamlit as st
 import threading
-import uvicorn
 import requests
-from api import app as fastapi_app
 import base64
 import io
 import streamlit.components.v1 as components
 import time
 import hashlib
+import os
 
 # ---------- Utility: safe Streamlit rerun (supports old and new API) ----------
 
@@ -74,6 +73,9 @@ st.sidebar.write("Upload any PDF or Word document. The content will be vector-in
 
 uploaded_files = st.sidebar.file_uploader("Select PDF or DOCX files", type=["pdf", "docx"], accept_multiple_files=True)
 
+# Configuration for API endpoint
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8005")
+
 if st.sidebar.button("Index Document(s)"):
     if not uploaded_files:
         st.sidebar.warning("Please choose at least one file.")
@@ -82,7 +84,7 @@ if st.sidebar.button("Index Document(s)"):
             ("files", (uf.name, uf, uf.type)) for uf in uploaded_files
         ]
         try:
-            resp = requests.post("http://localhost:8005/upload/", files=file_tuple)
+            resp = requests.post(f"{API_BASE_URL}/upload/", files=file_tuple)
             if resp.ok:
                 task_id = resp.json().get("task_id")
                 st.session_state['messages'] = []
@@ -91,7 +93,7 @@ if st.sidebar.button("Index Document(s)"):
                 pct = 0
                 while pct < 100 and pct >= 0:
                     try:
-                        p_resp = requests.get(f"http://localhost:8005/progress/{task_id}")
+                        p_resp = requests.get(f"{API_BASE_URL}/progress/{task_id}")
                         if p_resp.ok:
                             pct = p_resp.json().get("progress", 0)
                             if pct < 0:
@@ -113,15 +115,6 @@ if st.sidebar.button("Index Document(s)"):
                 st.sidebar.error(f"Error {resp.status_code}: {resp.json().get('detail')}")
         except Exception as e:
             st.sidebar.error(f"Connection error: {e}")
-
-# Start FastAPI only once using session_state
-
-def _start_api():
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=8005)
-
-if 'api_started' not in st.session_state:
-    threading.Thread(target=_start_api, daemon=True).start()
-    st.session_state['api_started'] = True
 
 # Main chat interface
 st.title("📚 RAG Chatbot")
@@ -169,7 +162,7 @@ if audio_bytes is not None:
         try:
             with st.spinner("Transcribing audio..."):
                 files = {"audio": ("question.wav", audio_bytes, "audio/wav")}
-                tr_resp = requests.post("http://localhost:8005/transcribe/", files=files)
+                tr_resp = requests.post(f"{API_BASE_URL}/transcribe/", files=files)
                 if tr_resp.ok:
                     transcript = tr_resp.json().get("text", "")
                     st.session_state['transcript_pending'] = transcript
@@ -203,9 +196,9 @@ if st.button("Send"):
                 data = {"voice": voice_choice}
                 if text_query:
                     data["question"] = text_query
-                resp = requests.post("http://localhost:8005/ask/", files=files, data=data)
+                resp = requests.post(f"{API_BASE_URL}/ask/", files=files, data=data)
             else:
-                resp = requests.post("http://localhost:8005/ask/", json={"question": text_query, "voice": voice_choice})
+                resp = requests.post(f"{API_BASE_URL}/ask/", json={"question": text_query, "voice": voice_choice})
 
             if resp.ok:
                 resp_json = resp.json()

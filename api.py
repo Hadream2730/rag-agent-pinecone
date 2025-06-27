@@ -9,10 +9,20 @@ from embedding_creator import create_pinecone_index
 from chatbot import answer_question
 from audio_utils import transcribe_audio, synthesize_speech
 import uuid
+from fastapi.middleware.cors import CORSMiddleware
 
 # ─── App & Directories ────────────────────────────────────
 app = FastAPI(default_response_class=ORJSONResponse)
 UPLOAD_DIR = "uploads"
+
+# Add CORS middleware for cross-origin requests (when UI and API are separate)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global progress dictionary {task_id: percentage}
 TASK_PROGRESS: dict[str, int] = {}
